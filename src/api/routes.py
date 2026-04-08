@@ -498,35 +498,22 @@ def _enrich_payload_with_direct_url(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _build_image_parts_from_uri(uri: str) -> List[Dict[str, Any]]:
+    # data:image URL 保持 inlineData 格式
     if uri.startswith("data:image"):
         mime_type, _ = _decode_data_url(uri)
         match = DATA_URL_RE.match(uri)
         if match:
             return [{"inlineData": {"mimeType": mime_type, "data": match.group("data")}}]
 
-    image_bytes = await retrieve_image_data(uri)
-    if image_bytes:
-        mime_type = _detect_image_mime_type(
-            image_bytes,
-            fallback=_guess_mime_type(uri, "image/png"),
-        )
-        return [
-            {
-                "inlineData": {
-                    "mimeType": mime_type,
-                    "data": base64.b64encode(image_bytes).decode("ascii"),
-                }
-            }
-        ]
-
+    # HTTP URL 或本地缓存路径: 直接返回 fileData + URL，不转 base64
+    mime_type = _guess_mime_type(uri, "image/png")
     return [
         {
             "fileData": {
-                "mimeType": _guess_mime_type(uri, "image/png"),
+                "mimeType": mime_type,
                 "fileUri": uri,
             }
-        },
-        {"text": uri},
+        }
     ]
 
 
