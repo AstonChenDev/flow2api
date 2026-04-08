@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: flow2api:local
-    container_name: flow2api
+    container_name: myFlow2api
     ports:
       - "38000:8000"
     volumes:
