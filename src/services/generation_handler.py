@@ -1381,28 +1381,44 @@ class GenerationHandler:
                                     image_trace["upsample_ms"] = int((time.time() - upsample_started_at) * 1000)
                                 return
                             except Exception as e:
-                                debug_logger.log_error(f"Failed to cache {resolution_name} image: {str(e)}")
-                                response_state["url"] = image_url
-                                response_state["generated_assets"]["upscaled_image"]["local_url"] = None
-                                response_state["generated_assets"]["upscaled_image"]["url"] = image_url
-                                response_state["generated_assets"]["upscaled_image"]["delivery_mode"] = "inline_base64_fallback"
-                                self._mark_generation_succeeded(generation_result)
-                                base64_url = f"data:image/jpeg;base64,{encoded_image}"
-                                if stream:
-                                    cache_error = self._normalize_error_message(e, max_length=120)
-                                    yield self._create_stream_chunk(f"⚠️ 缓存失败: {cache_error}，返回内联图片...\n")
-                                    yield self._create_stream_chunk(
-                                        f"![Generated Image]({base64_url})",
-                                        finish_reason="stop"
-                                    )
-                                else:
-                                    yield self._create_completion_response(
-                                        base64_url,
-                                        media_type="image"
-                                    )
-                                if image_trace is not None:
-                                    image_trace["upsample_ms"] = int((time.time() - upsample_started_at) * 1000)
-                                return
+                                debug_logger.log_error(f"Failed to cache {resolution_name} image via file_cache: {str(e)}")
+                                # 直接写入文件作为最后手段，确保图片一定保存到本地
+                                try:
+                                    import hashlib as _hl
+                                    fallback_name = _hl.md5(f"{time.time()}".encode()).hexdigest() + f"_{resolution_name}.jpg"
+                                    fallback_path = self.file_cache.cache_dir / fallback_name
+                                    with open(fallback_path, 'wb') as _f:
+                                        _f.write(base64.b64decode(encoded_image))
+                                    local_url = f"{self._get_base_url(response_state)}/tmp/{fallback_name}"
+                                    debug_logger.log_info(f"Fallback direct write succeeded: {fallback_name}")
+                                    response_state["url"] = local_url
+                                    response_state["generated_assets"]["upscaled_image"]["local_url"] = local_url
+                                    response_state["generated_assets"]["upscaled_image"]["url"] = local_url
+                                    self._mark_generation_succeeded(generation_result)
+                                    if stream:
+                                        yield self._create_stream_chunk(f"✅ {resolution_name} 图片已保存到本地（备用方式）\n")
+                                        yield self._create_stream_chunk(
+                                            f"![Generated Image]({local_url})",
+                                            finish_reason="stop"
+                                        )
+                                    else:
+                                        yield self._create_completion_response(
+                                            local_url,
+                                            media_type="image"
+                                        )
+                                    if image_trace is not None:
+                                        image_trace["upsample_ms"] = int((time.time() - upsample_started_at) * 1000)
+                                    return
+                                except Exception as e2:
+                                    error_msg = f"图片保存到本地失败: {str(e2)}"
+                                    debug_logger.log_error(f"[GENERATION] {error_msg}")
+                                    self._mark_generation_failed(generation_result, error_msg)
+                                    if stream:
+                                        yield self._create_stream_chunk(f"❌ {error_msg}\n")
+                                    yield self._create_error_response(error_msg, status_code=500)
+                                    if image_trace is not None:
+                                        image_trace["upsample_ms"] = int((time.time() - upsample_started_at) * 1000)
+                                    return
                         else:
                             debug_logger.log_warning("[UPSAMPLE] 返回结果为空")
                             if stream:
@@ -1430,28 +1446,28 @@ class GenerationHandler:
 
             local_url = image_url
             cache_started_at = time.time()
-            if config.cache_enabled:
-                await self._update_request_log_progress(
-                    request_log_state,
-                    token_id=token.id,
-                    status_text="caching_image",
-                    progress=90,
-                )
+            # 强制缓存：所有图片必须转存到本地，忽略 config.cache_enabled
+            await self._update_request_log_progress(
+                request_log_state,
+                token_id=token.id,
+                status_text="caching_image",
+                progress=90,
+            )
+            if stream:
+                yield self._create_stream_chunk("正在缓存 1K 图片文件...\n")
+            try:
+                cached_filename = await self.file_cache.download_and_cache(image_url, "image")
+                local_url = f"{self._get_base_url(response_state)}/tmp/{cached_filename}"
                 if stream:
-                    yield self._create_stream_chunk("正在缓存 1K 图片文件...\n")
-                try:
-                    cached_filename = await self.file_cache.download_and_cache(image_url, "image")
-                    local_url = f"{self._get_base_url(response_state)}/tmp/{cached_filename}"
-                    if stream:
-                        yield self._create_stream_chunk("✅ 1K 图片缓存成功,准备返回缓存地址...\n")
-                except Exception as e:
-                    debug_logger.log_error(f"Failed to cache 1K image: {str(e)}")
-                    local_url = image_url
-                    if stream:
-                        cache_error = self._normalize_error_message(e, max_length=120)
-                        yield self._create_stream_chunk(f"⚠️ 缓存失败: {cache_error}\n正在返回源链接...\n")
-            elif stream:
-                yield self._create_stream_chunk("缓存已关闭,正在返回官方图片链接...\n")
+                    yield self._create_stream_chunk("✅ 1K 图片缓存成功,准备返回缓存地址...\n")
+            except Exception as e:
+                error_msg = f"图片转存到本地失败: {str(e)}"
+                debug_logger.log_error(f"[GENERATION] {error_msg}")
+                self._mark_generation_failed(generation_result, error_msg)
+                if stream:
+                    yield self._create_stream_chunk(f"❌ {error_msg}\n")
+                yield self._create_error_response(error_msg, status_code=500)
+                return
             if image_trace is not None:
                 image_trace["cache_image_ms"] = int((time.time() - cache_started_at) * 1000)
 
