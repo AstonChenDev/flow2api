@@ -1,6 +1,6 @@
 """Data models for Flow2API"""
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from typing import Optional, List, Union, Any, Literal
 from datetime import datetime
 
@@ -243,12 +243,30 @@ class GeminiInlineData(BaseModel):
     mimeType: str
     data: str
 
+    @model_validator(mode='before')
+    @classmethod
+    def _normalize_keys(cls, data):
+        if isinstance(data, dict):
+            if 'mime_type' in data and 'mimeType' not in data:
+                data['mimeType'] = data.pop('mime_type')
+        return data
+
 
 class GeminiFileData(BaseModel):
     """Gemini file reference."""
 
     fileUri: str
     mimeType: Optional[str] = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def _normalize_keys(cls, data):
+        if isinstance(data, dict):
+            if 'file_uri' in data and 'fileUri' not in data:
+                data['fileUri'] = data.pop('file_uri')
+            if 'mime_type' in data and 'mimeType' not in data:
+                data['mimeType'] = data.pop('mime_type')
+        return data
 
 
 class GeminiPart(BaseModel):
@@ -259,6 +277,16 @@ class GeminiPart(BaseModel):
     fileData: Optional[GeminiFileData] = None
 
     model_config = ConfigDict(extra="allow")
+
+    @model_validator(mode='before')
+    @classmethod
+    def _normalize_keys(cls, data):
+        if isinstance(data, dict):
+            if 'inline_data' in data and 'inlineData' not in data:
+                data['inlineData'] = data.pop('inline_data')
+            if 'file_data' in data and 'fileData' not in data:
+                data['fileData'] = data.pop('file_data')
+        return data
 
 
 class GeminiContent(BaseModel):
